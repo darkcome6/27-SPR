@@ -110,7 +110,10 @@ HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);   // 让 PB0 输出高电平
 ```bash
 git config --global user.name "你的名字"
 git config --global user.email "你的邮箱"
+git config user.name                 # 验证：只打印一行，就是刚配的名字
+git config user.email                # 验证：只打印一行，就是刚配的邮箱
 ```
+> 验证用上面那两行就好。别写 `git config -list`（少一个横杠会直接报错），也别在 `git config --list` 的几十行里硬找名字——它还会把旧值一起打出来，容易误判成"没配上"。
 
 **日常**：
 ```bash
