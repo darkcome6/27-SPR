@@ -1,0 +1,6 @@
+{
+    // cpptools 默认认不出 ARM GCC 的头文件，会对所有外设寄存器报红波浪线
+    // 这里把"错误波浪线"整类关掉 —— 注意：真实的语法错误也就一起不提示了
+    // 想两全：加一个 c_cpp_properties.json，把 compilerPath 指向 arm-none-eabi-gcc.exe
+    "C_Cpp.errorSquiggles": "disabled"
+}

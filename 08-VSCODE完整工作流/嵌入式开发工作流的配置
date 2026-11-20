@@ -1,0 +1,125 @@
+环境要求： 主要是利用插件CORTEX-DEBUG以及之前配置的工具链（02-嵌入式电控开发环境配置\2.1-工具链配置\2.1.1-嵌入式编程环境的配置中  3. 工具链 MSYS2 MinGW64详细讲解过 ）来使得VSCODE具备烧录调试单片机的功能
+<img src="图库/cortex-DEBUG.png" width="60%">  
+然后需要做两件事：**① 让 VSCODE 找得到工具链；② 告诉 cortex-debug 用哪个探针、哪块芯片、烧哪个文件。**
+
+注意一个常见误解：**工具链路径不是必须写进配置的**。只要 PATH 里声明过（2.1.1 已经做过），cortex-debug 会自己去 PATH 里找。把路径写进配置只是"多版本共存"或"PATH 不生效"时的兜底手段。
+
+---
+
+## 可选：在用户设置里显式指定工具链路径
+
+> 走 PATH 的同学可以跳过这一节，直接看下面的"正常配置流程"。
+
+步骤：
+1.打开命令行（CTRL+SHIFT+P）输入:打开用户设置（json），进入到用户的 setting.json 的配置文件
+2.找到 Cortex-Debug
+
+![alt text](image.png)
+
+---
+
+## 先搞清一件事：cortex-debug 到底在干什么
+
+新手最容易误解的地方，是以为"装完插件就能烧录调试"。其实 cortex-debug **自己不会编译、不会烧录、也不会读芯片**，它只做一件事——把下面这两个程序启动起来，再把结果画到 VSCODE 界面上。
+
+```
+VSCODE (cortex-debug)
+   │ 启动
+   ├─▶ arm-none-eabi-gdb          ← 下断点、读变量、发单步指令的就是它
+   │        │ GDB-Remote 协议 (TCP 3333)
+   │        ▼
+   ├─▶ OpenOCD / JLinkGDBServer   ← 把 GDB 的命令翻译成 SWD 时序
+   │        │ USB
+   │        ▼
+   └─▶ DAP-Link / ST-Link / J-Link ──SWD──▶ 芯片
+```
+
+这条链上任何一层断了，表现都是"按 F5 报错"，但**原因完全不同**。所以下面一步一步来，每一步都能自己验证。
+
+## 第一步：三件套得先在终端里跑得起来
+
+在 VSCODE 的集成终端里（按 `Ctrl` + 键盘左上角 Esc 下面那个反引号键）挨个敲：
+
+| 程序 | 作用 | 验证命令 |
+|---|---|---|
+| `arm-none-eabi-gcc` | 把 C 代码编译成 `.elf` | `arm-none-eabi-gcc --version` |
+| `arm-none-eabi-gdb` | 真正的"操作芯片"者：断点、变量、单步 | `arm-none-eabi-gdb --version` |
+| `openocd` | 调试服务器，GDB 和探针之间的翻译官 | `openocd --version` |
+
+三条都能出版本号，才叫"工具链就绪"。哪条报"不是内部或外部命令"，先回去查 2.1.1 的 PATH，不要往下走。
+
+> 为什么必须在这里验证，而不是"我觉得装好了"：**改了 PATH 之后，必须完全退出 VSCODE 再重新打开**（Reload Window 不算，它不重读进程环境变量）。如果是从任务栏固定图标启动的，父进程 `explorer.exe` 的 PATH 还是登录时的快照，这时得注销重登才生效。
+
+## 第二步：让 VSCODE 找得到探针
+
+DAP-Link / ST-Link / J-Link 三种探针，走 OpenOCD 的话**只需要换一个 `interface` 配置文件**，其余完全一样——这是最省心的写法，不用记三套机制。
+
+J-Link 也可以用 SEGGER 自己的 GDB Server（`servertype: "jlink"`），看个人习惯。
+
+## 第三步：写 `launch.json`（真正的配置在这里）
+
+把 [嵌入式开发工作区配置文件](./嵌入式开发工作区配置文件/) 里的三个文件复制到**你的项目根目录**下的 `.vscode/` 文件夹里。
+
+`launch.json` 里每个字段都不能瞎填，逐个说清为什么：
+
+| 字段 | 作用 | 填错/不填的后果 |
+|---|---|---|
+| `servertype` | 用哪个调试服务器（`openocd` / `jlink`） | 决定后面去读哪个路径、连哪个 server |
+| `executable` | 要调试的 `.elf` | 填 `.hex` / `.bin` 就"能烧进去但打不了断点、看不到变量"——Keil 转过来最常犯的错 |
+| `configFiles` | OpenOCD 的两层配置：`interface/` 是探针，`target/` 是芯片系列 | `target` 填错的表现是"能连上、一跑就 HardFault / 读不到内存" |
+| `device` | 芯片型号，J-Link 靠它决定内存布局和烧录算法 | J-Link 下不填直接报错 |
+| `runToEntryPoint` | 调试启动后直接跑到 `main` | 不设会停在启动文件的 `Reset_Handler`，新手以为卡死了 |
+| `rtos` | 开启 RTOS 感知（能看到任务栈） | 裸机工程设了它会去找不存在的符号，必须删掉 |
+| `preLaunchTask` | 调试前先编译 | 不配就是"改了代码按 F5，调试的却是上一次的固件"——最阴的坑 |
+| `svdFile` | 芯片寄存器描述文件 | 不配，外设窗口里只有一串没有名字的地址 |
+
+两种 `request` 的区别，很多人到毕业都没搞清：
+
+- `launch`：**先烧录再调试**。相当于 Keil 的 Download + Debug 一起做。
+- `attach`：**不烧录**，只连上芯片里正在跑的那份固件。适合"程序已经跑飞了、卡住了，想看看它现在停在哪"。
+
+## 第四步：写 `tasks.json`（编译归它管）
+
+cortex-debug 不管编译。`tasks.json` 里的 `build` 任务就是 `launch.json` 里 `preLaunchTask` 指向的那个东西。
+
+这里有一条和 Keil 反过来的铁律：
+
+> **必须带 `-g` 编译选项；优化等级用 `-O0` 或 `-Og`。**
+
+GCC 在 `-O2` 下会把局部变量优化掉（Watch 窗口里显示 `<optimized out>`），断点还会随机跳到别的行。Keil 的 `-O2` 相对温和，所以带着 Keil 习惯过来的人一定会在这里撞墙。
+
+## 第五步：分层验证（不要一上来就 F5 碰运气）
+
+```
+① 终端敲 arm-none-eabi-gcc --version / openocd --version
+      ✗ 没有版本号 → PATH 没被继承，别往下查了
+      ✓ 有版本号 ↓
+② 终端手动敲：openocd -f interface/cmsis-dap.cfg -f target/stm32f4x.cfg
+      ✗ Error: open failed → 驱动没装 / 接线问题 / 探针被别的软件占用
+      ✓ 出现 Info : Listening on port 3333 和芯片 IDCODE ↓
+③ Ctrl+C 停掉 OpenOCD，回 VSCODE 按 F5
+      ✓ 停在 main → 通了
+```
+
+分成三层，每层的失败原因完全不同，这样才能"定位到哪一层断了"，而不是"反正 F5 不行"。
+
+## 常见错误对照表
+
+| 现象 | 真正原因 |
+|---|---|
+| `Unable to find OpenOCD` / `spawn openocd ENOENT` | PATH 没被继承：没完全重启 VSCODE，或从任务栏图标启动 |
+| `Error: open failed` / `No device found` | 驱动没装、USB 线只供电不通信、**Keil 正开着锁住了探针** ← 最高频 |
+| 能连上但 `Cannot access memory` / 一运行就 HardFault | `configFiles` 里的 `target` 选错芯片系列 |
+| 断点是灰圈、跳行、变量 `<optimized out>` | 没加 `-g`，或优化等级太高 |
+| 停在 `Reset_Handler` 不进 `main` | 没设 `runToEntryPoint` |
+| 改了代码不生效 | 没配 `preLaunchTask` |
+| 外设窗口只有地址、没有寄存器名 | `svdFile` 没配或路径不对 |
+
+## 用户设置 vs 工作区设置，别搞混
+
+| | 位置 | 管什么 | 适合放什么 |
+|---|---|---|---|
+| 用户设置 | `%APPDATA%\Code\User\settings.json` | 你这台机器上所有项目 | 主题、字体、工具链路径（兜底） |
+| 工作区设置 | 项目根目录 `.vscode/settings.json` | 只有当前项目 | 调试路径、编译参数 |
+
+原则：**跟项目绑定的东西放工作区，跟机器绑定的东西放用户设置。** 把 `launch.json` 放用户设置里是不生效的，它只认工作区。
